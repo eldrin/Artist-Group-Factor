@@ -1,0 +1,54 @@
+name: agf
+channels:
+  - defaults
+dependencies:
+  - backcall=0.1.0=py36_0
+  - blas=1.0=mkl
+  - ca-certificates=2018.03.07=0
+  - certifi=2018.10.15=py36_0
+  - decorator=4.3.0=py36_0
+  - intel-openmp=2019.0=118
+  - ipython=7.1.1=py36h39e3cac_0
+  - ipython_genutils=0.2.0=py36_0
+  - jedi=0.13.1=py36_0
+  - libedit=3.1.20170329=h6b74fdf_2
+  - libffi=3.2.1=hd88cf55_4
+  - libgcc-ng=8.2.0=hdf63c60_1
+  - libgfortran-ng=7.3.0=hdf63c60_0
+  - libstdcxx-ng=8.2.0=hdf63c60_1
+  - mkl=2019.0=118
+  - mkl_fft=1.0.6=py36h7dd41cf_0
+  - mkl_random=1.0.1=py36h4414c95_1
+  - ncurses=6.1=hf484d3e_0
+  - numpy=1.15.4=py36h1d66e8a_0
+  - numpy-base=1.15.4=py36h81de0dd_0
+  - openssl=1.1.1=h7b6447c_0
+  - pandas=0.23.4=py36h04863e7_0
+  - parso=0.3.1=py36_0
+  - pexpect=4.6.0=py36_0
+  - pickleshare=0.7.5=py36_0
+  - pip=18.1=py36_0
+  - prompt_toolkit=2.0.7=py36_0
+  - ptyprocess=0.6.0=py36_0
+  - pygments=2.2.0=py36_0
+  - python=3.6.7=h0371630_0
+  - python-dateutil=2.7.5=py36_0
+  - pytz=2018.7=py36_0
+  - readline=7.0=h7b6447c_5
+  - scikit-learn=0.20.0=py36h4989274_1
+  - scipy=1.1.0=py36hfa4b5c9_1
+  - setuptools=40.5.0=py36_0
+  - six=1.11.0=py36_1
+  - sqlite=3.25.2=h7b6447c_0
+  - tk=8.6.8=hbc83047_0
+  - tqdm=4.28.1=py36h28b3542_0
+  - traitlets=4.3.2=py36_0
+  - wcwidth=0.1.7=py36_0
+  - wheel=0.32.2=py36_0
+  - xz=5.2.4=h14c3975_4
+  - zlib=1.2.11=ha838bed_2
+  - pip:
+    - essentia==2.1b5.dev416
+    - pyyaml==3.13
+prefix: /mnt/conda_env/miniconda3/envs/agf
+
