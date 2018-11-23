@@ -8,4 +8,4 @@ class Config:
     R = 40       # num. of latent class for LDA
     D = 25       # num. of coefficients for MFCC
     C = 12       # num. of coefficients for Chroma
-    NJOBS = -1   # num. of thread for LDA training (-1 means all cores)
+    NJOBS = None    # num. of thread for LDA training (-1 means all cores)

@@ -1,40 +1,77 @@
-import pandas as pd
+from multiprocessing import Pool
+
+import essentia
+essentia.log.infoActive = False
+from essentia.standard import *
+
+import librosa
+import numpy as np
+
+from tqdm import tqdm
+
+KEYS = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+KEY_MAP = {key: one_hot for key, one_hot in zip(KEYS, np.eye(len(KEYS)))}
+MODES = ['major', 'minor']
+MODE_MAP = {mode: one_hot for mode, one_hot in zip(MODES, np.eye(len(MODES)))}
 
 
-class MetaDataLoader:
+def audioread(fn, sr):
     """"""
-    def __init__(self, metadata_fn):
-        """"""
-        self.metadata_fn = metadata_fn
-        self.metadata = pd.read_csv(self.metadata_fn,
-                                    header=[0, 1], index_col=0)
-        # retrieve medium subset
-        self.metadata = self.metadata[
-            (self.metadata['set']['subset'] == 'medium') |
-            (self.metadata['set']['subset'] == 'small')
-        ]
+    return librosa.load(fn, sr=sr)[0]
 
-    @property
-    def track_artist_map(self):
-        """"""
-        return dict(self.metadata['artist', 'id'].items())
 
-    @property
-    def track_genre_map(self):
-        """"""
-        return dict(self.metadata['track', 'genre_top'].items())
+def pool2dict(pool, flatten=True):
+    """ Convert Pool object to dictionary
 
-    @property
-    def track_subgenre_map(self):
-        """"""
-        return dict(map(lambda kv: (kv[0], eval(kv[1])),
-                        self.metadata['track', 'genres_all'].items()))
+    Args:
+        pool (essentia.Pool): contains all the feature output from extractors
+        flatten (bool): flag for flattening the dict value when the entry is vector
+    """
+    output = {}
+    for key in pool.descriptorNames():
+        if key == 'rhythm.beats_position':
+            continue
+        if key.split('.')[0] == 'metadata':
+            continue
+        if 'cov' in key.split('.')[-1]:
+            # U, S, V = np.linalg.svd(a[key])
+            # maybe doing summarization by PCA
+            continue
+        else:
+            if isinstance(pool[key], np.ndarray) and pool[key].shape[0] > 1:
+                for i, val in enumerate(pool[key]):
+                    output[key + '_{:d}'.format(i)] = val
+            elif pool[key] in KEYS:
+                for k, val in enumerate(KEY_MAP[pool[key]]):
+                    output[key + '_{}'.format(KEYS[k])] = val
+            elif pool[key] in MODES:
+                for k, val in enumerate(MODE_MAP[pool[key]]):
+                    output[key + '_{}'.format(MODES[k])] = val
+            else:
+                output[key] = pool[key]
 
-    @property
-    def artist_audio_map(self):
-        """"""
-        return dict(
-            self.metadata.reset_index()
-                .groupby(('artist', 'id'))
-                .track_id.apply(list).items()
-        )
+    # force converting
+    for k, v in output.items():
+        output[k] = float(v)
+
+    return output
+
+
+def parmap(func, iterable, n_workers=2, verbose=False):
+    """ Simple Implementation for Parallel Map """
+    
+    if n_workers == 1:
+        if verbose:
+            iterable = tqdm(iterable, total=len(iterable), ncols=80)
+        return map(func, iterable)
+    else:
+        with Pool(processes=n_workers) as p:
+            if verbose:
+                with tqdm(total=len(iterable), ncols=80) as pbar:
+                    output = []
+                    for o in p.imap_unordered(func, iterable):
+                        output.append(o)
+                        pbar.update()
+                return output
+            else:
+                return p.imap_unordered(func, iterable)

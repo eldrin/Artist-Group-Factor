@@ -1,147 +1,267 @@
+import json
+import os
 from os.path import basename, join, dirname
+import glob
+from collections import Counter
+from functools import partial
+from itertools import chain
+import pickle as pkl
 
 import numpy as np
 from scipy import sparse as sp
 from sklearn.decomposition import LatentDirichletAllocation
-from sklearn.cluster import MiniBatchKMeans
-from essentia.standard import *
+from sklearn.cluster import MiniBatchKMeans, KMeans
+import pandas as pd
 
 from tqdm import tqdm
+tqdm80 = partial(tqdm, ncols=80)
 
-from .utils import MetaDataLoader
+from .data import MetaDataLoader
 from .config import Config as cfg
+from .utils import *
 
 
-AGF_TYPES = {'m': 'mfcc',
-             'd': 'dmfcc',
-             'e': 'essentia',
-             's': 'subgenre'}
+with open(join(dirname(__file__),
+               '../data/essentia_feat_columns.pkl'), 'rb') as f:
+    ESS_COLS = pkl.load(f)
 
 
-class AGF:
+class BaseAGF:
     """ Artist Group Factor Extractor """
-    def __init__(self, metadata_fn, sample_rate=cfg.SR, num_clusters=cfg.K,
-                 num_factors=cfg.R, num_mels=cfg.M, num_mfccs=cfg.D,
-                 num_chromas=cfg.C, verbose=False):
+    def __init__(self, metadata_fn, verbose=False):
+        """"""
         # load variables
-        self.sample_rate = sample_rate
-        self.num_clusters = num_clusters
-        self.num_factors = num_factors
-        self.num_mels = num_mels
-        self.num_mfccs = num_mfccs
-        self.num_chromas = num_chromas
         self.verbose = verbose
 
         # load metadata
         self.metadata = MetaDataLoader(metadata_fn)
 
-    def extract(self, audio_fns, agf_type='m'):
+    def process(self):
+        """"""
+        raise NotImplementedError()
+
+    def _learn_dict(self, fns):
+        """"""
+        raise NotImplementedError()
+
+    @staticmethod
+    def _load_data(fn):
+        """"""
+        raise NotImplementedError()
+
+    @staticmethod
+    def _aggregate_data(batch):
+        """"""
+        raise NotImplementedError()
+
+    def _learn_factor_model(self, codebook):
+        """"""
+        # train the top-level factor model with LDA
+        lda = LatentDirichletAllocation(cfg.R, n_jobs=cfg.NJOBS)
+
+        # get agf
+        z = lda.fit_transform(codebook)
+
+        # register factor model to the instance
+        self.fac = lda
+
+        return z
+
+
+class DictionaryLearningAGF(BaseAGF):
+    """"""
+    def __init__(self, metadata_fn, batch_size, dict_model,
+                 normalize=True, verbose=False):
+        """"""
+        super().__init__(metadata_fn, verbose=verbose)
+        self.batch_size = batch_size
+        self.dict_model = dict_model
+        self.normalize = normalize
+
+    def process(self, feature_fns):
         """
         Args:
-            audio_fn (list of str): list of filenames of audio
-            artist_audio_map (dict):
-                dictionary containing maps from artist (int. index) to
-                relevant songs (list of int. indices)
-            type (str): flag for the AGF type {'m', 'd', 'e', 's'}
+            feature_fns (list of str): list of filenames of feature
         """
-        self._verify_agf_type(agf_type)
-
-        # convert list of fns into dictionary of name/fns
-        audio_fns = {int(basename(fn).split('.mp3')[0]):fn for fn in audio_fns}
-
-        if agf_type == 'm':
-            return extract_mfcc_agf(audio_fns, self.metadata.artist_audio_map,
-                                    sr=self.sample_rate,
-                                    m=self.num_mels, d=self.num_mfccs,
-                                    k=self.num_clusters, r=self.num_factors,
-                                    verbose=self.verbose)
-        elif agf_type == 'd':
-            raise NotImplementedError()
-
-        elif agf_type == 'e':
-            raise NotImplementedError()
-
-        elif agf_type == 's':
-            raise NotImplementedError()
-
-        else:
-            raise NotImplementedError()
-            
-    def _verify_agf_type(self, type):
+        # initiate dictionary model
+        self._learn_dict(feature_fns)
+        codes = self._build_code(feature_fns)
+        z = self._learn_factor_model(codes)
+        return z
+        
+    def _learn_dict(self, fns):
         """"""
-        assert type in AGF_TYPES
+        dic = self.dict_model(cfg.K)
+        iterator = range(0, len(fns), self.batch_size)
+        if self.verbose: iterator = tqdm(iterator, ncols=80)
+        for i in iterator:
+            batch = []
+            for fn in fns[i:i + self.batch_size]:
+                batch.append(self._load_data(fn))
+            dic.partial_fit(self._aggregate_data(batch))
+
+        # register model
+        self.dic = dic
+
+    def _build_code(self, fns):
+        """"""
+        # binarize the features based on the trained dictionary model
+        # cache some useful infos...
+        tid2fn = {int(basename(fn).split('.')[0]):fn for fn in fns}
+        aid_hash = {
+            v:k for k, v in enumerate(
+                self.metadata.metadata['artist', 'id'].unique())
+        }
+        i, j, v = [], [], []  # containors for artist_id, track_id, count
+        for artist_id, track_ids in tqdm80(
+                self.metadata.artist_audio_map.items()):
+            # run over songs from the artist
+            data = [
+                self._load_data(tid2fn[track_id])
+                for track_id in track_ids
+                if track_id in tid2fn
+            ]
+            n_tracks = len(data)
+            data = self._aggregate_data(data)
+            # check if there's no data
+            if data.shape[0] > 0:
+                # train the dictionary model
+                for k, c in Counter(self.dic.predict(data)).items():
+                    i.append(aid_hash[artist_id])
+                    j.append(k)
+
+                    if self.normalize:
+                        v.append(c / n_tracks)
+                    else:
+                        v.append(c)
+
+        # build sparse matrix to get the artist BoW
+        codes = sp.coo_matrix((v, (i, j)),
+                              shape=(len(aid_hash), cfg.K)).tocsr()
+        return codes
 
 
-def extract_mfcc_agf(audio_fns, artist_audio_map, sr, m, d, k, r, verbose=False):
-    """ Extract MFCC based AGF
+class MFCCAGF(DictionaryLearningAGF):
+    """"""
+    def __init__(self, metadata_fn, batch_size=256, normalize=True,
+                 verbose=False):
+        """"""
+        super().__init__(metadata_fn, batch_size, dict_model=MiniBatchKMeans,
+                         normalize=normalize, verbose=verbose)
 
-    Args:
-        audio_fns (list of str): list containing all target audio files
-        artist_audio_map (dict):
-            dictionary containing maps from artist (int. index) to
-            relevant songs (list of int. indices)
-        sr (int): sampling rate
-        m (int): number of mel bands
-        d (int): number of mfcc coefficients
-        k (int): number of clusters for K-Means
-        r (int): number of factors for LDA
-        verbose (bool): verbosity
-    """
-    # 1. get universal feature model
-    kms = MiniBatchKMeans(n_clusters=k)
-    mfccs = {}
+    @staticmethod
+    def _load_data(fn):
+        """"""
+        return np.load(fn)
 
-    iterator = artist_audio_map.items()
-    if verbose:
-        print('Getting global Kmeans model...')
-        iterator = tqdm(iterator, ncols=80)
+    @staticmethod
+    def _aggregate_data(batch):
+        """"""
+        return np.concatenate(batch, 0)
 
-    # process!
-    for artist_id, track_ids in iterator:
-        # get MFCCs per artist
-        mfccs[artist_id] = []
-        for track_id in track_ids:
-            fn = audio_fns[track_id]
-            # add every frames from all songs
-            for frame in FrameGenerator(MonoLoader(filename=fn, sampleRate=sr)(),
-                                        frameSize=cfg.WINSZ, hopSize=cfg.HOPSZ):
-                mfccs[artist_id].append(
-                    MFCC(numberBands=m, numberCoefficients=d, sampleRate=sr)(
-                        Spectrum(size=len(frame))(frame)
-                    )[1]  # only takes the MFCCs
-                )
-        mfccs[artist_id] = np.array(mfccs[artist_id])
 
-        # update K-Means
-        kms.partial_fit(mfccs[artist_id])
+class DMFCCAGF(DictionaryLearningAGF):
+    """"""
+    def __init__(self, metadata_fn, batch_size=256, normalize=True, 
+                 verbose=False):
+        """"""
+        super().__init__(metadata_fn, batch_size, dict_model=MiniBatchKMeans,
+                         normalize=normalize, verbose=verbose)
 
-    # get individual songs Bag-of-Features
-    iterator = artist_audio_map.items()
-    if verbose:
-        print('Getting global Kmeans model...')
-        iterator = tqdm(iterator, ncols=80)
+    @staticmethod
+    def _load_data(fn):
+        """"""
+        m = np.load(fn)
+        return m[1:] - m[:-1]
 
-    # define fn-integer map for further process
-    artist2ind = dict([(v, k) for k, v in enumerate(artist_audio_map.keys())])
-    raw_sparse_v = []
-    raw_sparse_i = []
-    raw_sparse_j = []
-    for artist_id, track_id in iterator:
-        # for the normalization over the # of songs per artist
-        n_frames = mfccs[artist_id].shape[0]
-        for k, freq in sorted(Counter(kms.predict(mfccs[artist_id])).items(),
-                              key=lambda k: k[0]):
-            # register data
-            raw_sparse_v.append(artist2ind[artist])
-            raw_sparse_i.append(k)
-            raw_sparse_j.append(freq/n_frames)
+    @staticmethod
+    def _aggregate_data(batch):
+        """"""
+        return np.concatenate(batch, 0)
 
-    # build sparse data matrix (n_audio, n_clusters)
-    Xs = sp.coo_matrix((raw_sparse_v, (raw_sparse_i, raw_sparse_j)),
-                       shape=(len(artist2ind), k)).tocsr()
 
-    # initiate LDA & get the AGF
-    lda = LatentDirichletAllocation(n_components=r, n_jobs=cfg.NJOBS)
-    zs = lda.fit_transform(Xs)
+class EssentiaAGF(DictionaryLearningAGF):
+    """"""
+    def __init__(self, metadata_fn, batch_size=2048, normalize=True,
+                 verbose=False):
+        """"""
+        global ESS_COLS
+        super().__init__(metadata_fn, batch_size, dict_model=MiniBatchKMeans,
+                         normalize=normalize, verbose=verbose)
+        self.cols = ESS_COLS
 
-    return zs, kms, lda
+    @staticmethod
+    def _load_data(fn):
+        """"""
+        with open(fn) as f:
+            data = json.load(f)
+        return data
+
+    def _aggregate_data(self, batch):
+        """"""
+        return pd.DataFrame(batch, columns=self.cols)
+
+
+class SubGenreAGF(BaseAGF):
+    """"""
+    def __init__(self, metadata_fn, normalize=True, verbose=False):
+        """"""
+        super().__init__(metadata_fn, verbose=verbose)
+        self.normalize = normalize
+    
+    def process(self):
+        """
+        Args:
+            feature_fns (list of str): list of filenames of feature
+        """
+        # initiate dictionary model
+        codes = self._build_code()
+        z = self._learn_factor_model(codes)
+        return z
+
+    def _build_code(self):
+        """"""
+        genres = self.metadata.metadata['track', 'genres'].apply(eval)
+        # build the set of genres
+        genres2idx = {
+            v:k for k, v
+            in enumerate(set(chain.from_iterable(genres.values)))
+        } 
+        tid2genres = genres.to_dict()
+
+        # binarize the features based on the trained dictionary model
+        # cache some useful infos...
+        aid_hash = {
+            v:k for k, v in enumerate(
+                self.metadata.metadata['artist', 'id'].unique())
+        }
+        i, j, v = [], [], []  # containors for artist_id, track_id, count
+        for artist_id, track_ids in tqdm80(
+                self.metadata.artist_audio_map.items()):
+
+            # run over songs from the artist
+            data = list(chain.from_iterable(
+                [
+                    [genres2idx[g] for g in tid2genres[tid]]
+                    for tid in track_ids
+                ]
+            ))
+            n_tracks = len(track_ids)
+            # check if there's no data
+            if len(data) > 0:
+                # train the dictionary model
+                for k, c in Counter(data).items():
+                    i.append(aid_hash[artist_id])
+                    j.append(k)
+
+                    if self.normalize:
+                        v.append(c / n_tracks)
+                    else:
+                        v.append(c)
+
+        # build sparse matrix to get the artist BoW
+        codes = sp.coo_matrix((v, (i, j)),
+                              shape=(len(aid_hash), cfg.K)).tocsr()
+        return codes
+
+
