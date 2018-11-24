@@ -35,6 +35,10 @@ class BaseAGF:
 
         # load metadata
         self.metadata = MetaDataLoader(metadata_fn)
+        self.aid_hash = {
+            v:k for k, v in enumerate(
+                sorted(self.metadata.metadata['artist', 'id'].unique()))
+        }
 
     def process(self):
         """"""
@@ -67,6 +71,16 @@ class BaseAGF:
 
         return z
 
+    def _reassign_to_tracks(self, z):
+        """"""
+        reassigned = {}
+        for aid, tids in self.metadata.artist_audio_map.items():
+            #retrieve AGF
+            agf = z[self.aid_hash[aid]].ravel().tolist()
+            for tid in tids:
+                reassigned[tid] = agf   # reassign
+        return reassigned
+
 
 class DictionaryLearningAGF(BaseAGF):
     """"""
@@ -87,7 +101,8 @@ class DictionaryLearningAGF(BaseAGF):
         self._learn_dict(feature_fns)
         codes = self._build_code(feature_fns)
         z = self._learn_factor_model(codes)
-        return z
+        y = self._reassign_to_tracks(z)
+        return y
         
     def _learn_dict(self, fns):
         """"""
@@ -108,10 +123,6 @@ class DictionaryLearningAGF(BaseAGF):
         # binarize the features based on the trained dictionary model
         # cache some useful infos...
         tid2fn = {int(basename(fn).split('.')[0]):fn for fn in fns}
-        aid_hash = {
-            v:k for k, v in enumerate(
-                self.metadata.metadata['artist', 'id'].unique())
-        }
         i, j, v = [], [], []  # containors for artist_id, track_id, count
         for artist_id, track_ids in tqdm80(
                 self.metadata.artist_audio_map.items()):
@@ -127,7 +138,7 @@ class DictionaryLearningAGF(BaseAGF):
             if data.shape[0] > 0:
                 # train the dictionary model
                 for k, c in Counter(self.dic.predict(data)).items():
-                    i.append(aid_hash[artist_id])
+                    i.append(self.aid_hash[artist_id])
                     j.append(k)
 
                     if self.normalize:
@@ -137,7 +148,7 @@ class DictionaryLearningAGF(BaseAGF):
 
         # build sparse matrix to get the artist BoW
         codes = sp.coo_matrix((v, (i, j)),
-                              shape=(len(aid_hash), cfg.K)).tocsr()
+                              shape=(len(self.aid_hash), cfg.K)).tocsr()
         return codes
 
 
@@ -217,7 +228,8 @@ class SubGenreAGF(BaseAGF):
         # initiate dictionary model
         codes = self._build_code()
         z = self._learn_factor_model(codes)
-        return z
+        y = self._reassign_to_tracks(z)
+        return y
 
     def _build_code(self):
         """"""
@@ -231,10 +243,6 @@ class SubGenreAGF(BaseAGF):
 
         # binarize the features based on the trained dictionary model
         # cache some useful infos...
-        aid_hash = {
-            v:k for k, v in enumerate(
-                self.metadata.metadata['artist', 'id'].unique())
-        }
         i, j, v = [], [], []  # containors for artist_id, track_id, count
         for artist_id, track_ids in tqdm80(
                 self.metadata.artist_audio_map.items()):
@@ -251,7 +259,7 @@ class SubGenreAGF(BaseAGF):
             if len(data) > 0:
                 # train the dictionary model
                 for k, c in Counter(data).items():
-                    i.append(aid_hash[artist_id])
+                    i.append(self.aid_hash[artist_id])
                     j.append(k)
 
                     if self.normalize:
@@ -261,7 +269,5 @@ class SubGenreAGF(BaseAGF):
 
         # build sparse matrix to get the artist BoW
         codes = sp.coo_matrix((v, (i, j)),
-                              shape=(len(aid_hash), cfg.K)).tocsr()
+                              shape=(len(self.aid_hash), cfg.K)).tocsr()
         return codes
-
-

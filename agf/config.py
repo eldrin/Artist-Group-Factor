@@ -1,6 +1,6 @@
 class Config:
     """ General Configuration """
-    SR = 22050   # samplerate
+    SR = 22050   # audio samplerate
     WINSZ = 2048 # window size (same for NFFT)
     HOPSZ = 1024 # hop size for STFT anaylsis
     M = 128      # num. of mel bands

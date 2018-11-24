@@ -38,3 +38,8 @@ class MetaDataLoader:
                 .groupby(('artist', 'id'))
                 .track_id.apply(list).items()
         )
+
+    @property
+    def n_tracks(self):
+        """"""
+        return self.metadata.shape[0]
