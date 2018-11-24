@@ -22,7 +22,7 @@ tqdm
 Either you can install dependencies manually, or if you are using `conda`, you can also build a virtual environment with following command at the root of this repository.
 
 ```
-conda env create -f environment.yml
+$conda env create -f environment.yml
 ```
 
 ## Extraction
